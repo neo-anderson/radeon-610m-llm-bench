@@ -20,7 +20,7 @@ Three ways to seat the LLM that does this work (Gemma E2B `Q4_K_M`, llama.cpp, `
   precisely when the user expects an answer. And because the two workloads share no prompt
   prefix, every context switch between chat and memory processing drops the KV cache and re-runs
   a prefill of thousands of tokens from scratch.
-- **Option B — dedicated sidecar on the CPU** (today's deployment). It works, until the cost
+- **Option B — dedicated sidecar on the CPU** (the current setup). It works, until the cost
   shows up: CPU usage at 80–90%, the board's VRM over-temp alarm trips, and the system bell
   starts beeping.
 - **Option C — dedicated sidecar on the iGPU.** The obvious GPU — a large NVIDIA dGPU — is
@@ -50,7 +50,7 @@ flowchart TB
     end
 
     subgraph CPU["CPU · 16-core Zen 5"]
-        CORES["Option B — TODAY: sidecar on 12 threads<br/>80–90% core load → VRM over-temp alarm"]
+        CORES["Option B — CURRENT: sidecar on 12 threads<br/>80–90% core load → VRM over-temp alarm"]
     end
 
     subgraph IGPU["Radeon 610M iGPU · 2 CUs · no VRAM"]
