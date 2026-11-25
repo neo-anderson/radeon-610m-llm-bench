@@ -12,7 +12,13 @@ small local LLM over captured conversations to distill them into recallable memo
 are batch jobs — heavy prefill (consolidation prompts run 10k+ tokens), latency-tolerant by
 design, meant to churn away in parallel with everything else.
 
-Three ways to seat the LLM that does this work (Gemma E2B `Q4_K_M`, llama.cpp, `--threads 12`):
+And it is not a Hermes-specific curiosity: Hindsight ships official integrations for
+**OpenClaw** (a memory-provider plugin that replaces its built-in memory), Claude Code,
+LangGraph/LangChain, CrewAI, the LiteLLM wrapper, and dozens more — plus an MCP endpoint for
+any client. Any harness wired to it inherits the same background LLM, and the same question of
+where to seat it.
+
+Three ways to seat the memory LLM (Gemma E2B `Q4_K_M`, llama.cpp, `--threads 12`):
 
 - **Option A — share the chat model.** The chat model could run the memory pipeline itself, but
   retention fires after every message and consolidation every few minutes — plus Hermes' own
