@@ -137,6 +137,46 @@ process itself stays at ~42% of one core.
 7. **Verify the number is real.** gpu_busy% of 100 + near-zero process CPU during decode is the
    signature of a genuine iGPU decode; anything else and you may be timing a CPU fallback.
 
+## Post-mortem: production reality one day later (2026-11-25)
+
+We deployed Option C — the Vulkan container in this repo, `--device Vulkan0
+--n-gpu-layers 99` — as the live Hindsight sidecar. **It was reverted to CPU the
+same day.** The benchmark was executed correctly and its numbers replicated
+(smoke test: 16.8 t/s decode); what was wrong was *which number we made the
+decision on*:
+
+1. **We led with the decode ratio; the workload is prefill-bound.** A Hindsight
+   retain/consolidation call runs a 5k–16k-token prompt producing a few hundred
+   tokens of JSON — roughly 85% of its GPU time is prompt eval. For that mix the
+   relevant ratio was never decode's 2.1×, it was prefill — and production
+   prefill on the 610M was far worse than the bench's "only" 3.4×.
+2. **The bench's prefill number flattered the iGPU.** Short prompt chunks at
+   ctx 8192, GPU otherwise idle, no concurrency. The real server ran long
+   prompts against live KV pressure (GTT allocation churn, multiple queued
+   requests, and RADV's Flash-Attention fallback that executes FA's K/V pass on
+   CPU). A/B on the *identical* 3,775-token cold prompt, same model, same
+   llama.cpp build: **CPU prefill 1,662 t/s vs iGPU ≈ 30 t/s effective** — the
+   same consolidation call took **215 s** on the iGPU vs an estimated ~25 s on
+   the CPU. From the queue's side this looked like "consolidation enters the
+   queue and nothing completes": it was one 20-minute GPU round blocking every
+   retain behind it, one slot deep.
+3. **The thermal premise didn't hold either.** The VRM over-temp alarm *persisted*
+   with the sidecar on the iGPU and the cores idle — the 610M's graphics block
+   lives inside the CPU package and its steady 100%-busy current feeds the same
+   power stages and the same board sensor the Vcore rail drives. Moving compute
+   from the cores to the iGPU moved current between neighboring rails; it did
+   not take it off the sensor.
+
+**Lessons for anyone reusing this bench:** match the benchmark's *workload
+shape*, not just the model — for agentic/memory pipelines that means long-prompt
+completions measured at production context sizes with queued requests; report
+prefill and decode as first-class results and pick the ratio that matches your
+call's token mix; on APUs, verify what the board sensor actually sums before
+assuming GPU offload is thermal relief. The iGPU result stands for what it
+measures — *decode* at half CPU speed for <5% of the cores — and an
+appropriately-shaped workload (decode-heavy, truly fire-and-forget) may still
+want it. Ours wasn't.
+
 ## Setup
 
 Requirements: Linux, Mesa/Vulkan (RADV), `/dev/dri/renderD*` accessible, a GGUF a few GB or smaller.
@@ -192,4 +232,7 @@ Requirements: Linux, Mesa/Vulkan (RADV), `/dev/dri/renderD*` accessible, a GGUF 
 ## Repo layout
 
 - `gemma-610m-vs-cpu.sh` — the benchmark (defaults tuned for the author's box; override via env).
+- `Dockerfile` — the production container we evaluated: pinned official Vulkan build +
+  Mesa RADV inside, iGPU-only by construction (no NVIDIA ICD in the image; pass a single
+  `/dev/dri/renderD*` at runtime). Read the Post-mortem before deploying it.
 - `llama-b12627/` — not committed; download per Setup step 1.
