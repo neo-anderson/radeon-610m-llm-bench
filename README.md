@@ -4,36 +4,41 @@
 Ryzen 9000 desktop chips) take over a small background LLM from the CPU, when the constraint is
 not speed but CPU load, CPU temperature, and motherboard VRM thermals?*
 
-The motivating case: an agent-memory pipeline with no cloud LLMs. **Hindsight** runs locally as
+## Motivation
+
+The case: an agent-memory pipeline with no cloud LLMs. **Hindsight** runs locally as
 the external memory provider for the Hermes Agent; its retain and consolidation phases drive a
-small local LLM (Gemma E2B `Q4_K_M`, llama.cpp, `--threads 12`) over captured conversations to
-distill them into recallable memory units. These are batch jobs — heavy prefill (consolidation
-prompts run 10k+ tokens), latency-tolerant by design, meant to churn away in parallel with
-everything else.
+small local LLM over captured conversations to distill them into recallable memory units. These
+are batch jobs — heavy prefill (consolidation prompts run 10k+ tokens), latency-tolerant by
+design, meant to churn away in parallel with everything else.
 
-The obvious host for that LLM — a large NVIDIA dGPU — is already fully committed serving the
-main chat, agentic, and automation models; there is no VRAM left to seat Gemma. The chat model
-could run the memory pipeline itself, but retention fires after every message and consolidation
-every few minutes — plus Hermes' own memory updates and thread summarization — so the shared
-endpoint is busy with background work precisely when the user expects an answer. And because the
-two workloads share no prompt prefix, every context switch between chat and memory processing
-drops the KV cache and re-runs a prefill of thousands of tokens from scratch. So the sidecar
-runs on the CPU — where it works, until the cost shows up: CPU usage at 80–90%, the board's VRM
-over-temp alarm trips, and the system bell starts beeping.
+Three ways to seat the LLM that does this work (Gemma E2B `Q4_K_M`, llama.cpp, `--threads 12`):
 
-That leaves the one "GPU" nobody counts as a GPU: the 2-CU Radeon 610M.
+- **Option A — share the chat model.** The chat model could run the memory pipeline itself, but
+  retention fires after every message and consolidation every few minutes — plus Hermes' own
+  memory updates and thread summarization — so the shared endpoint is busy with background work
+  precisely when the user expects an answer. And because the two workloads share no prompt
+  prefix, every context switch between chat and memory processing drops the KV cache and re-runs
+  a prefill of thousands of tokens from scratch.
+- **Option B — dedicated sidecar on the CPU** (today's deployment). It works, until the cost
+  shows up: CPU usage at 80–90%, the board's VRM over-temp alarm trips, and the system bell
+  starts beeping.
+- **Option C — dedicated sidecar on the iGPU.** The obvious GPU — a large NVIDIA dGPU — is
+  already fully committed serving the main chat, agentic, and automation models; there is no
+  VRAM left to seat Gemma. That leaves the one "GPU" nobody counts as a GPU: the 2-CU Radeon
+  610M. This repo measures **B vs C** head-to-head.
 
 ## Architecture at a glance
 
-Solid = today, dashed = proposed. The sidecar's two candidate homes are shown side by side;
-note both reach memory through the *same* DIMMs — the iGPU has none of its own.
+The three seating options from the Motivation. The benchmark measures Option B against Option C.
+Note both sidecar options reach memory through the *same* DIMMs — the iGPU has none of its own.
 
 ```mermaid
 flowchart TB
     Hermes["Hermes Agent<br/>chat · agentic · automation"]
 
     subgraph dGPU["Discrete NVIDIA GPU"]
-        CHAT["Chat model serving"]
+        CHAT["Option A — share the chat model:<br/>busy with background work when users wait;<br/>KV dropped & re-prefilled on every switch"]
         VRAM["VRAM — fully allocated<br/>no room to seat the memory LLM"]
         CHAT --- VRAM
     end
@@ -45,26 +50,26 @@ flowchart TB
     end
 
     subgraph CPU["CPU · 16-core Zen 5"]
-        CORES["TODAY: sidecar on 12 threads<br/>80–90% core load → VRM over-temp alarm"]
+        CORES["Option B — TODAY: sidecar on 12 threads<br/>80–90% core load → VRM over-temp alarm"]
     end
 
     subgraph IGPU["Radeon 610M iGPU · 2 CUs · no VRAM"]
-        TARGET["PROPOSED: sidecar via Vulkan<br/>full offload · ~0.4 CPU cores"]
+        TARGET["Option C — PROPOSED: sidecar via Vulkan<br/>full offload · ~0.4 CPU cores"]
     end
 
     RAM["System RAM · dual-channel DDR5<br/>every weight & KV cache lives here<br/>iGPU reaches it through a GTT window"]
 
     Hermes -->|"chat & tool calls"| CHAT
     Hermes -->|"retain after every message<br/>consolidation every few min"| API
-    SIDECAR ==> CORES
-    SIDECAR -.->|"2× slower, ~5% core load"| TARGET
+    SIDECAR -.->|"Option B"| CORES
+    SIDECAR -.->|"Option C: 2× slower, ~5% core load"| TARGET
+    API -.->|"Option A"| CHAT
     CORES --> RAM
     TARGET -->|"same DIMMs"| RAM
-    API -.->|"rejected: sharing the chat model —<br/>every chat↔memory switch re-prefills"| CHAT
 
     style CORES fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
     style TARGET fill:#dcfce7,stroke:#16a34a,color:#14532d
-    style CHAT fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+    style CHAT fill:#fef9c3,stroke:#ca8a04,color:#713f12
     style RAM fill:#f3e8ff,stroke:#9333ea,color:#581c87
 ```
 
