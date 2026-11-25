@@ -23,6 +23,51 @@ over-temp alarm trips, and the system bell starts beeping.
 
 That leaves the one "GPU" nobody counts as a GPU: the 2-CU Radeon 610M.
 
+## Architecture at a glance
+
+Solid = today, dashed = proposed. The sidecar's two candidate homes are shown side by side;
+note both reach memory through the *same* DIMMs — the iGPU has none of its own.
+
+```mermaid
+flowchart TB
+    Hermes["Hermes Agent<br/>chat · agentic · automation"]
+
+    subgraph dGPU["Discrete NVIDIA GPU"]
+        CHAT["Chat model serving"]
+        VRAM["VRAM — fully allocated<br/>no room to seat the memory LLM"]
+        CHAT --- VRAM
+    end
+
+    subgraph MEM["Hindsight — local memory provider"]
+        API["API + Postgres/pgvector<br/>retain · consolidate · recall"]
+        SIDECAR["Gemma E2B sidecar<br/>llama.cpp server"]
+        API -->|"LLM calls"| SIDECAR
+    end
+
+    subgraph CPU["CPU · 16-core Zen 5"]
+        CORES["TODAY: sidecar on 12 threads<br/>80–90% core load → VRM over-temp alarm"]
+    end
+
+    subgraph IGPU["Radeon 610M iGPU · 2 CUs · no VRAM"]
+        TARGET["PROPOSED: sidecar via Vulkan<br/>full offload · ~0.4 CPU cores"]
+    end
+
+    RAM["System RAM · dual-channel DDR5<br/>every weight & KV cache lives here<br/>iGPU reaches it through a GTT window"]
+
+    Hermes -->|"chat & tool calls"| CHAT
+    Hermes -->|"retain after every message<br/>consolidation every few min"| API
+    SIDECAR ==> CORES
+    SIDECAR -.->|"2× slower, ~5% core load"| TARGET
+    CORES --> RAM
+    TARGET -->|"same DIMMs"| RAM
+    API -.->|"rejected: sharing the chat model —<br/>every chat↔memory switch re-prefills"| CHAT
+
+    style CORES fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    style TARGET fill:#dcfce7,stroke:#16a34a,color:#14532d
+    style CHAT fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+    style RAM fill:#f3e8ff,stroke:#9333ea,color:#581c87
+```
+
 If your workload is fire-and-forget and your bottleneck is *core current through the VRM*,
 this repo measures whether the iGPU is a real option — with the gotchas that make or break
 the experiment.
