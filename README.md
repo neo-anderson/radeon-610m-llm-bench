@@ -4,12 +4,21 @@
 Ryzen 9000 desktop chips) take over a small background LLM from the CPU, when the constraint is
 not speed but CPU load, CPU temperature, and motherboard VRM thermals?*
 
-The motivating case: a Hindsight memory-consolidation sidecar (Gemma E2B `Q4_K_M`, llama.cpp,
-`--threads 12`) runs fine on the CPU — but pushes the CPU to 80–90%, trips the board's
-VRM over-temp alarm, and makes the system bell beep.
-The discrete GPU (a large NVIDIA dGPU) is deliberately off-limits: it serves the interactive chat model,
-and background jobs must not touch it. So the only "GPU" available for background work is the
-silicon nobody considers a GPU at all: the 2-CU Radeon 610M.
+The motivating case: an agent-memory pipeline with no cloud LLMs. **Hindsight** runs locally as
+the external memory provider for the Hermes Agent; its retain and consolidation phases drive a
+small local LLM (Gemma E2B `Q4_K_M`, llama.cpp, `--threads 12`) over captured conversations to
+distill them into recallable memory units. These are batch jobs — heavy prefill (consolidation
+prompts run 10k+ tokens), latency-tolerant by design, meant to churn away in parallel with
+everything else.
+
+The obvious host for that LLM — a large NVIDIA dGPU — is already fully committed serving the
+main chat, agentic, and automation models; there is no VRAM left to seat Gemma. Sharing the
+dGPU with the same model works, but every background call queues behind the chat model: a
+latency tax on work that was designed to run in parallel in the background. So the sidecar runs
+on the CPU — where it works, until the cost shows up: CPU usage at 80–90%, the board's VRM
+over-temp alarm trips, and the system bell starts beeping.
+
+That leaves the one "GPU" nobody counts as a GPU: the 2-CU Radeon 610M.
 
 If your workload is fire-and-forget and your bottleneck is *core current through the VRM*,
 this repo measures whether the iGPU is a real option — with the gotchas that make or break
