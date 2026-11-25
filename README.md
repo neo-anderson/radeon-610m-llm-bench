@@ -27,11 +27,15 @@ Three ways to seat the LLM that does this work (Gemma E2B `Q4_K_M`, llama.cpp, `
   already fully committed serving the main chat, agentic, and automation models; there is no
   VRAM left to seat Gemma. That leaves the one "GPU" nobody counts as a GPU: the 2-CU Radeon
   610M. This repo measures **B vs C** head-to-head.
+- **Option D — a cloud LLM.** Operationally the easiest, and what the default configs assume,
+  but this pipeline reads the entire conversation to build memory — the whole point is that it
+  stays local. Cloud is out by design; noted only so the option table is complete.
 
 ## Architecture at a glance
 
-The three seating options from the Motivation. The benchmark measures Option B against Option C.
-Note both sidecar options reach memory through the *same* DIMMs — the iGPU has none of its own.
+The four seating options from the Motivation — D is out by design (local-first). The benchmark
+measures Option B against Option C. Note both sidecar options reach memory through the *same*
+DIMMs — the iGPU has none of its own.
 
 ```mermaid
 flowchart TB
@@ -59,11 +63,14 @@ flowchart TB
 
     RAM["System RAM · dual-channel DDR5<br/>every weight & KV cache lives here<br/>iGPU reaches it through a GTT window"]
 
+    CLOUD["Option D — cloud LLM<br/>out by design: memory reads<br/>the whole conversation; staying local"]
+
     Hermes -->|"chat & tool calls"| CHAT
     Hermes -->|"retain after every message<br/>consolidation every few min"| API
     SIDECAR -.->|"Option B"| CORES
     SIDECAR -.->|"Option C: 2× slower, ~5% core load"| TARGET
     API -.->|"Option A"| CHAT
+    API -.->|"Option D"| CLOUD
     CORES --> RAM
     TARGET -->|"same DIMMs"| RAM
 
@@ -71,6 +78,7 @@ flowchart TB
     style TARGET fill:#dcfce7,stroke:#16a34a,color:#14532d
     style CHAT fill:#fef9c3,stroke:#ca8a04,color:#713f12
     style RAM fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    style CLOUD fill:#f1f5f9,stroke:#94a3b8,color:#475569
 ```
 
 If your workload is fire-and-forget and your bottleneck is *core current through the VRM*,
